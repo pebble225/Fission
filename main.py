@@ -14,8 +14,6 @@ class Atom():
 
 class Neutron():
 	def __init__(self, pos, r, owner = None):
-		if (owner == None):
-			print("no owner")
 		self.pos = pos[:]
 		self.r = r % 360.0
 		self.owner = owner
