@@ -1,5 +1,3 @@
-from ast import And
-from locale import normalize
 import pygame
 import random
 import math
