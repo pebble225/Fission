@@ -7,6 +7,7 @@ running = True
 
 screenDim = (1600, 900)
 
+# what a waste of space this class is
 class Atom():
 	def __init__(self, pos):
 		self.pos = pos
