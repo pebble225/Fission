@@ -1,199 +1,272 @@
 import pygame
-import random
-import math
+from screeninfo import get_monitors
+from rng import LCG
+import numpy as np
+import weakref
 
-window = None
-running = True
-
-screenDim = (1600, 900)
-
-# what a waste of space this class is
-class Atom():
-	def __init__(self, pos):
+class Particle:
+	def __init__(self, pos: list[float, float] = [0.0, 0.0], radius: float = 2):
 		self.pos = pos
+		self.vel = [0.0, 0.0]
+		self.radius = radius
+		self.collisions: Particle = []
+
+		self.remove = False
+
+	def GetLeft(self):
+		return self.pos[0]-self.radius
+
+	def GetRight(self):
+		return self.pos[0]+self.radius
+
+	def GetTop(self):
+		return self.pos[1]-self.radius
+
+	def GetBottom(self):
+		return self.pos[1]+self.radius
+
+	def FlagForRemoval(self):
+		self.remove = True
 
 
-class Neutron():
-	def __init__(self, pos, r, owner = None):
-		self.pos = pos[:]
-		self.r = r % 360.0
-		self.owner = owner
-	
+class Uranium(Particle):
+	def __init__(self, pos: list[float, float] = [0, 0]):
+		super().__init__(pos, radius = 3)
 
-	def Update(self):
-		global neutronInstance, neutronSpeed, screenDim, neutronRadius, uraniumRadius
-		x = neutronSpeed * math.cos(self.r * math.pi / 180)
-		y = neutronSpeed * math.sin(self.r * math.pi / 180)
-		
-		n = math.sqrt(x*x + y*y)
-		step = ((x / n) * neutronRadius, (y / n) * neutronRadius)
-		
-		pos2 = self.pos[:]
-		
-		noCollision = True
+class AlphaParticle(Particle):
+	def __init__(self, angle: float, parent: Uranium):
+		super().__init__(list(parent.pos), radius = 2)
 
-		i = 0
+		SPEED = 10
 
-		while i < neutronSpeed:
-			pos2 = [pos2[0] + step[0], pos2[1] + step[1]]
-			for u in uraniumInstance:
-				if circlesIntersect(pos2[0], pos2[1], neutronRadius, u.pos[0], u.pos[1], uraniumRadius) and u != self.owner:
-					u.splitFlag = True
-					noCollision = False
-			i += neutronRadius
-		
-		if (noCollision):
-			self.pos = [self.pos[0] + x, self.pos[1] + y]
-		else:
-			neutronInstance.remove(self)
-		if self.pos[0] < 0 or self.pos[0] > screenDim[0] or self.pos[1] < 0 or self.pos[1] > screenDim[1]:
-			neutronInstance.remove(self)
+		self.parent = parent
+		self.vel = [np.cos(np.radians(angle)) * SPEED, np.sin(np.radians(angle)) * SPEED]
+
+class Controller:
+	def __init__(self):
+		self.FLOOD = False
+		self.COMPRESS = False
+		self.FREEZE = False
+
+	def RegisterEvent(self, e: pygame.Event):
+		if e.type == pygame.KEYDOWN:
+			if e.key == pygame.K_1:
+				self.FLOOD = True
+			elif e.key == pygame.K_2:
+				self.COMPRESS = True
+		elif e.type == pygame.KEYUP:
+			if e.key == pygame.K_1:
+				self.FLOOD = False
+			elif e.key == pygame.K_2:
+				self.COMPRESS = False
+			elif e.key == pygame.K_3:
+				self.FREEZE = not self.FREEZE
 
 
+class Renderer:
+	def __init__(self, window: pygame.Surface, dim: tuple[int, int], controller: Controller):
+		self.window = window
+		self.dim = dim
+		self.controller = controller
 
-	def Render(self):
-		global window, uraniumRadius, neutronObservedRadius
+		self.font = None
 
-		pygame.draw.circle(window, (255, 255, 100), self.pos, neutronObservedRadius)
+	def RenderUranium(self, uranium: Uranium):
+		pygame.draw.circle(self.window, (30, 190, 75), uranium.pos, uranium.radius)
 
-
-class Uranium():
-	def __init__(self, pos):
-		Atom.__init__(self, pos)
-		self.splitFlag = False
-	def Update(self):
-		global uraniumInstance, decayChance, neutronInstance, uraniumSplitRange, compressionMode, screenDim, uraniumDecay
-		if self.splitFlag:
-			uraniumInstance.remove(self)
-			nCount = random.randint(uraniumSplitRange[0], uraniumSplitRange[1])
-			for i in range(0, nCount, 1):
-				neutronInstance.append(Neutron(self.pos, random.random()*360.0))
-			return
-
-		if uraniumDecay and random.random() <= decayChance:
-			neutronInstance.append(Neutron(self.pos, random.random()*360.0, self))
-		
-		if compressionMode:
-			diff = [(screenDim[0] / 2 - self.pos[0]) / 100, (screenDim[1] / 2 - self.pos[1]) / 100]
-			self.pos = [self.pos[0] + diff[0], self.pos[1] + diff[1]]
-
-	def Render(self):
-		global window, uraniumRadius
-		pygame.draw.circle(window, (255, 100, 100) if uraniumDecay else (200, 200, 200), self.pos, uraniumRadius)
-	
-
-def createUranium(tries = 0):
-	global uraniumInstance
-
-	u = Uranium([random.random()*1500 + 50, random.random()*800 + 50])
-
-	f = False
-
-	for n in uraniumInstance:
-		if type(n) == Uranium:
-			if circlesIntersect(u.pos[0], u.pos[1], uraniumRadius, n.pos[0], n.pos[1], uraniumRadius):
-				f = True
-	
-	if f:
-		u = None
-		if tries < 2048:
-			createUranium(tries + 1)
-	else:
-		uraniumInstance.append(u)
+	def RenderAlphaParticle(self, alpha: Uranium, delta: float):
+		pos = [alpha.pos[0] + alpha.vel[0]*delta, alpha.pos[1] + alpha.vel[1]*delta]
+		pygame.draw.circle(self.window, (255, 255, 255), pos, alpha.radius)
 
 
-def Update():
-	global uraniumInstance
+class GameInstance:
+	def __init__(self):
+		self.running = True
+		self.window: pygame.Surface | None = None
 
-	for n in uraniumInstance:
-		n.Update()
-	
+		self.controller = Controller()
+		self.dim = (1600, 900)
 
-	for n in neutronInstance:
-		n.Update()
+		self.renderer: Renderer | None = None
 
+		self.ran = LCG.NADS64bit()
 
-def Render():
-	global window, uraniumInstance
-	
-	window.fill((0, 0, 0))
+		self.particles: list[Particle] = []
+		self.floodTimer = 0
+		self.floodTimerMax = 1
 
-	for n in uraniumInstance:
-		n.Render()
-	for k in neutronInstance:
-		k.Render()
-
-	pygame.display.flip()
-
-
-def circlesIntersect(x1, y1, r1, x2, y2, r2):
-	return r1+r2 >= math.sqrt((x2-x1)*(x2-x1) + (y2-y1)*(y2-y1))
-
-
-uraniumInstance = []
-neutronInstance = []
-
-
-uraniumRadius = 2
-neutronRadius = 0.5
-neutronObservedRadius = 2
-neutronSpeed = 10
-decayChance = 1/600
-uraniumSplitRange = (2, 6)
-
-
-compressionMode = False
-uraniumDecay = True
-
-def main():
-	global window, running, uraniumInstance, screenDim, uraniumDecay, compressionMode
-
-	pygame.init()
-
-	window = pygame.display.set_mode(screenDim)
-
-	pygame.display.set_caption("Nuclear Fission")
-
-	timer = pygame.time.get_ticks()
-
-	for i in range(0, 10, 1):
-		createUranium()
-
-	while running:
+	def Input(self):
 		for e in pygame.event.get():
 			if e.type == pygame.QUIT:
-				running = False
-			elif e.type == pygame.KEYDOWN:
-				if e.key == pygame.K_1:
-					for i in range(0, 10, 1):
-						createUranium()
-				elif e.key == pygame.K_2 and (not compressionMode):
-					compressionMode = True
-			elif e.type == pygame.KEYUP:
-				if e.key == pygame.K_2 and compressionMode:
-					compressionMode = False
-				elif e.key == pygame.K_3:
-					if uraniumDecay:
-						uraniumDecay = False
-					else:
-						uraniumDecay = True
+				self.running = False
+			self.controller.RegisterEvent(e)
+
+	def RectCollision(self, a: Particle, b: Particle):
+		return a.GetRight() > b.GetLeft() and a.GetLeft() < b.GetRight() and a.GetBottom() > b.GetTop() and a.GetTop() < b.GetBottom()
+
+	def Collisions(self, distance: float | None = None, offset: list[float, float] | None = None, particles: list[Particle] | None = None):
+		TOLERANCE = 4
+
+		if offset is None:
+			offset = [0, 0]
+		if particles is None:
+			particles = self.particles
+		if distance is None:
+			distance = self.dim[0]
+			self.collision_list = []
+
+		if len(particles) < 2:
+			return
+
+		if distance < TOLERANCE:
+			for i in range(0, len(particles)-1, 1):
+				for j in range(i+1, len(particles), 1):
+					particleA: Particle = particles[i]
+					particleB: Particle = particles[j]
+
+					if self.RectCollision(particleA, particleB):
+						if particleB not in particleA.collisions:
+							particleA.collisions.append(particleB)
+						if particleA not in particleB.collisions:
+							particleB.collisions.append(particleA)
+			return
+
+		half_distance = distance / 2.0
+		half_x = offset[0] + half_distance
+		half_y = offset[1] + half_distance
+
+		topLeft = []
+		topRight = []
+		bottomLeft = []
+		bottomRight = []
+		for particle in particles:
+			if particle.GetLeft() < half_x and particle.GetTop() < half_y:
+				topLeft.append(particle)
+			if particle.GetRight() > half_x and particle.GetTop() < half_y:
+				topRight.append(particle)
+			if particle.GetLeft() < half_x and particle.GetBottom() > half_y:
+				bottomLeft.append(particle)
+			if particle.GetRight() > half_x and particle.GetBottom() > half_y:
+				bottomRight.append(particle)
+
+		if len(topLeft) > 1:
+			self.Collisions(half_distance, [offset[0], offset[1]], topLeft)
+		if len(topRight) > 1:
+			self.Collisions(half_distance, [offset[0] + half_distance, offset[1]], topRight)
+		if len(bottomLeft) > 1:
+			self.Collisions(half_distance, [offset[0], offset[1] + half_distance], bottomLeft)
+		if len(bottomRight) > 1:
+			self.Collisions(half_distance, [offset[0] + half_distance, offset[1] + half_distance], bottomRight)
 
 
-		theTime = pygame.time.get_ticks()
+	def Start(self):
+		self.renderer = Renderer(self.window, self.dim, self.controller)
 
-		if (theTime-timer > 17):
-			timer = theTime
-			Update()
-			Render()
+		for i in range(20):
+			self.particles.append(Uranium([self.ran.floatRange(0.0, self.dim[0]), self.ran.floatRange(0.0, self.dim[1])]))
 
+	def FixedUpdate(self):
+		if self.controller.FLOOD:
+			if self.floodTimer == 0:
+				self.particles.append(Uranium([self.ran.floatRange(0.0, self.dim[0]), self.ran.floatRange(0.0, self.dim[1])]))
+				self.floodTimer = self.floodTimerMax
+			else:
+				self.floodTimer -= 1
+		else:
+			self.floodTimer = 0
+
+		if self.controller.COMPRESS:
+			for particle in self.particles:
+				if isinstance(particle, Uranium):
+					diff = [(self.dim[0] / 2 - particle.pos[0]) / 100, (self.dim[1] / 2 - particle.pos[1]) / 100]
+					particle.pos[0] = particle.pos[0] + diff[0]
+					particle.pos[1] = particle.pos[1] + diff[1]
+
+
+		for particle in reversed(self.particles):
+			if isinstance(particle, Uranium):
+				if (not self.controller.FREEZE) and self.ran.intRange(1, 1000) == 1:
+					self.particles.append(AlphaParticle(self.ran.floatRange(0.0, 360.0), particle))
+					particle.collisions = []
+			elif isinstance(particle, AlphaParticle):
+				particle.pos[0] += particle.vel[0]
+				particle.pos[1] += particle.vel[1]
+
+				for collider in particle.collisions:
+					if collider is particle.parent:
+						pass
+					elif isinstance(collider, Uranium):
+						particle.FlagForRemoval()
+						collider.FlagForRemoval()
+
+						n = self.ran.intRange(3, 6)
+						a = self.ran.floatRange(0.0, 360.0)
+						for i in range(n):
+							ap = AlphaParticle(a, collider)
+							ap.parent = None # whoops
+							self.particles.append(ap)
+
+				if particle.pos[0] < 0 or particle.pos[1] > self.dim[0] or particle.pos[1] < 0 or particle.pos[1] > self.dim[1]:
+					particle.FlagForRemoval()
+
+		for index, particle in reversed(list(enumerate(self.particles))):
+			if particle.remove:
+				self.particles.pop(index)
+
+		self.Collisions()
+
+
+	def DrawText(self, string: str, pos: list[float, float], color: tuple[int, int, int] = (255, 255, 255)):
+		surface = self.font.render(string, True, color)
+		self.window.blit(surface, pos)
+
+	def Render(self, delta: float):
+		self.window.fill((0, 0, 0))
+
+		for particle in self.particles:
+			if isinstance(particle, Uranium):
+				self.renderer.RenderUranium(particle)
+			elif isinstance(particle, AlphaParticle):
+				self.renderer.RenderAlphaParticle(particle, delta)
+
+		pygame.display.flip()
+
+	def main(self):
+		pygame.init()
+		pygame.font.init()
+
+		self.font = pygame.font.SysFont("freesans", 30)
+
+		for m in get_monitors():
+			if m.is_primary:
+				self.dim = (m.width, m.height)
 		
-		
+		self.window = pygame.display.set_mode(self.dim, pygame.NOFRAME | pygame.SCALED, display = 0, vsync = 1)
 
-	pygame.quit()
-	return
+		tps = 60.0
+		tickMS = 1000.0 / tps
 
+		tickDelta = 0
+
+		lastTick = pygame.time.get_ticks()
+
+		self.Start()
+
+		while self.running:
+			self.Input()
+
+			nowTick_pygame = pygame.time.get_ticks()
+			tickDelta += float(nowTick_pygame-lastTick)/tickMS
+			lastTick = nowTick_pygame
+
+			while not tickDelta < 1.0:
+				if tickDelta > 10.0:
+					tickDelta -= 10.0
+				self.FixedUpdate()
+				tickDelta -= 1.0
+
+			self.Render(tickDelta)
 
 if __name__ == "__main__":
-	main()
-
-
+	g = GameInstance()
+	g.main()
