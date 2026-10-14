@@ -105,7 +105,7 @@ class GameInstance:
 		return a.GetRight() > b.GetLeft() and a.GetLeft() < b.GetRight() and a.GetBottom() > b.GetTop() and a.GetTop() < b.GetBottom()
 
 	def Collisions(self, distance: float | None = None, offset: list[float, float] | None = None, particles: list[Particle] | None = None):
-		TOLERANCE = 4
+		TOLERANCE = 100
 
 		if offset is None:
 			offset = [0, 0]
@@ -187,7 +187,7 @@ class GameInstance:
 			if isinstance(particle, Uranium):
 				if (not self.controller.FREEZE) and self.ran.intRange(1, 1000) == 1:
 					self.particles.append(AlphaParticle(self.ran.floatRange(0.0, 360.0), particle))
-					particle.collisions = []
+				particle.collisions = []
 			elif isinstance(particle, AlphaParticle):
 				particle.pos[0] += particle.vel[0]
 				particle.pos[1] += particle.vel[1]
@@ -196,18 +196,25 @@ class GameInstance:
 					if collider is particle.parent:
 						pass
 					elif isinstance(collider, Uranium):
-						particle.FlagForRemoval()
-						collider.FlagForRemoval()
+						if self.controller.FREEZE:
+							pass
+						else:
+							particle.FlagForRemoval()
+							collider.FlagForRemoval()
 
-						n = self.ran.intRange(3, 6)
-						a = self.ran.floatRange(0.0, 360.0)
-						for i in range(n):
-							ap = AlphaParticle(a, collider)
-							ap.parent = None # whoops
-							self.particles.append(ap)
+							n = self.ran.intRange(3, 6)
+							a = self.ran.floatRange(0.0, 360.0)
+							for i in range(n):
 
-				if particle.pos[0] < 0 or particle.pos[1] > self.dim[0] or particle.pos[1] < 0 or particle.pos[1] > self.dim[1]:
+								a = self.ran.floatRange(0.0, 360.0)
+								ap = AlphaParticle(a, collider)
+								ap.parent = None # whoops
+								self.particles.append(ap)
+
+				if particle.pos[0] < 0 or particle.pos[0] > self.dim[0] or particle.pos[1] < 0 or particle.pos[1] > self.dim[1]:
 					particle.FlagForRemoval()
+
+				particle.collisions = []
 
 		for index, particle in reversed(list(enumerate(self.particles))):
 			if particle.remove:
