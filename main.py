@@ -45,6 +45,7 @@ class AlphaParticle(Particle):
 class Controller:
 	def __init__(self):
 		self.FLOOD = False
+		self.SHIFT = False
 		self.COMPRESS = False
 		self.FREEZE = False
 
@@ -54,11 +55,16 @@ class Controller:
 				self.FLOOD = True
 			elif e.key == pygame.K_2:
 				self.COMPRESS = True
+			elif e.key == pygame.K_LSHIFT:
+				self.SHIFT = True
+			
 		elif e.type == pygame.KEYUP:
 			if e.key == pygame.K_1:
 				self.FLOOD = False
 			elif e.key == pygame.K_2:
 				self.COMPRESS = False
+			elif e.key == pygame.K_LSHIFT:
+				self.SHIFT = False
 			elif e.key == pygame.K_3:
 				self.FREEZE = not self.FREEZE
 
@@ -95,6 +101,14 @@ class GameInstance:
 		self.floodTimer = 0
 		self.floodTimerMax = 1
 
+		self.totalCollisions = 0
+		self.totalChecks = 0
+
+		self.renderedTotalCollisions = 0
+		self.renderedTotalChecks = 0
+
+		self.reportTimer = 20
+
 	def Input(self):
 		for e in pygame.event.get():
 			if e.type == pygame.QUIT:
@@ -104,31 +118,50 @@ class GameInstance:
 	def RectCollision(self, a: Particle, b: Particle):
 		return a.GetRight() > b.GetLeft() and a.GetLeft() < b.GetRight() and a.GetBottom() > b.GetTop() and a.GetTop() < b.GetBottom()
 
-	def Collisions(self, distance: float | None = None, offset: list[float, float] | None = None, particles: list[Particle] | None = None):
-		TOLERANCE = 100
+	def Collisions(self, distance: float | None = None, offset: list[float, float] | None = None, particles: list[Particle] | None = None, limit: int = 100):
+		DISTANCE_TOLERANCE = 10
+		COUNT_TOLERANCE = 10
+
+		if limit < 1:
+			raise MemoryError("Stack overflow in Collision algorithm.")
 
 		if offset is None:
 			offset = [0, 0]
 		if particles is None:
 			particles = self.particles
+			for particle in self.particles:
+				particle.collisions = []
 		if distance is None:
 			distance = self.dim[0]
-			self.collision_list = []
 
 		if len(particles) < 2:
 			return
 
-		if distance < TOLERANCE:
+		if distance < DISTANCE_TOLERANCE or len(particles) < COUNT_TOLERANCE:
+			MAX_CHECKS = None
+			MIN_COLLISIONS = 100
+			if distance < DISTANCE_TOLERANCE and len(particles) >= COUNT_TOLERANCE:
+				MAX_CHECKS = 1000
 			for i in range(0, len(particles)-1, 1):
+				particleA: Particle = particles[i]
 				for j in range(i+1, len(particles), 1):
-					particleA: Particle = particles[i]
+					self.totalChecks += 1
+					if MAX_CHECKS is not None and self.totalChecks > MAX_CHECKS:
+						# too many checks!
+						if self.totalCollisions < MIN_COLLISIONS:
+							# overtime mode
+							pass
+						else:
+							return
 					particleB: Particle = particles[j]
-
-					if self.RectCollision(particleA, particleB):
-						if particleB not in particleA.collisions:
-							particleA.collisions.append(particleB)
-						if particleA not in particleB.collisions:
-							particleB.collisions.append(particleA)
+					if particleB not in particleA.collisions:
+						if isinstance(particleA, AlphaParticle) ^ isinstance(particleB, AlphaParticle): # rare xor W
+							if self.RectCollision(particleA, particleB):
+								self.totalCollisions += 1
+								particleA.collisions.append(particleB)
+								particleB.collisions.append(particleA)
+								if MAX_CHECKS is not None and MAX_CHECKS < 1:
+									return
 			return
 
 		half_distance = distance / 2.0
@@ -150,13 +183,13 @@ class GameInstance:
 				bottomRight.append(particle)
 
 		if len(topLeft) > 1:
-			self.Collisions(half_distance, [offset[0], offset[1]], topLeft)
+			self.Collisions(half_distance, [offset[0], offset[1]], topLeft, limit - 1)
 		if len(topRight) > 1:
-			self.Collisions(half_distance, [offset[0] + half_distance, offset[1]], topRight)
+			self.Collisions(half_distance, [offset[0] + half_distance, offset[1]], topRight, limit - 1)
 		if len(bottomLeft) > 1:
-			self.Collisions(half_distance, [offset[0], offset[1] + half_distance], bottomLeft)
+			self.Collisions(half_distance, [offset[0], offset[1] + half_distance], bottomLeft, limit - 1)
 		if len(bottomRight) > 1:
-			self.Collisions(half_distance, [offset[0] + half_distance, offset[1] + half_distance], bottomRight)
+			self.Collisions(half_distance, [offset[0] + half_distance, offset[1] + half_distance], bottomRight, limit - 1)
 
 
 	def Start(self):
@@ -187,7 +220,6 @@ class GameInstance:
 			if isinstance(particle, Uranium):
 				if (not self.controller.FREEZE) and self.ran.intRange(1, 1000) == 1:
 					self.particles.append(AlphaParticle(self.ran.floatRange(0.0, 360.0), particle))
-				particle.collisions = []
 			elif isinstance(particle, AlphaParticle):
 				particle.pos[0] += particle.vel[0]
 				particle.pos[1] += particle.vel[1]
@@ -214,12 +246,18 @@ class GameInstance:
 				if particle.pos[0] < 0 or particle.pos[0] > self.dim[0] or particle.pos[1] < 0 or particle.pos[1] > self.dim[1]:
 					particle.FlagForRemoval()
 
-				particle.collisions = []
-
 		for index, particle in reversed(list(enumerate(self.particles))):
 			if particle.remove:
 				self.particles.pop(index)
 
+		self.reportTimer -= 1
+		if self.reportTimer < 1:
+			self.reportTimer = 10
+			self.renderedTotalCollisions = self.totalCollisions
+			self.renderedTotalChecks = self.totalChecks
+
+		self.totalCollisions = 0
+		self.totalChecks = 0
 		self.Collisions()
 
 
@@ -235,6 +273,10 @@ class GameInstance:
 				self.renderer.RenderUranium(particle)
 			elif isinstance(particle, AlphaParticle):
 				self.renderer.RenderAlphaParticle(particle, delta)
+
+		self.DrawText(f"Collisions: {self.renderedTotalCollisions}", [0, 0])
+		self.DrawText(f"Total Checks: {self.renderedTotalChecks}", [0, 30])
+		self.DrawText(f"Total Particles: {len(self.particles)}", [0, 60])
 
 		pygame.display.flip()
 
